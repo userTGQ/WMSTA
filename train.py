@@ -7,7 +7,7 @@ import util
 import os
 from util import *
 import random
-from model import STAMT
+from model import WMSTA
 from ranger21 import Ranger
 import torch.optim as optim
 
@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--device", type=str, default="cuda:0", help="")
 parser.add_argument("--data", type=str, default="PEMS08", help="data path")
 parser.add_argument("--input_dim", type=int, default=3, help="input_dim")
-parser.add_argument("--channels", type=int, default=128, help="number of nodes")
+parser.add_argument("--channels", type=int, default=64, help="number of nodes")
 parser.add_argument("--num_nodes", type=int, default=170, help="number of nodes")
 parser.add_argument("--input_len", type=int, default=12, help="input_len")
 parser.add_argument("--output_len", type=int, default=12, help="out_len")
@@ -30,7 +30,7 @@ parser.add_argument("--print_every", type=int, default=50, help="")
 parser.add_argument(
     "--save",
     type=str,
-    default="./logs/" + str(time.strftime("%Y-%m-%d-%H:%M:%S")) + "-",
+    default="./logs/" + str(time.strftime("%Y-%m-%d-%H")) + "-",
     help="save path",
 )
 parser.add_argument(
@@ -56,7 +56,7 @@ class trainer:
         wdecay,
         device,
     ):
-        self.model = STAMT(
+        self.model = WMSTA(
             device, input_dim, channels, num_nodes, input_len, output_len, dropout
         )
         self.model.to(device)
