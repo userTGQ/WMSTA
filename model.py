@@ -357,10 +357,8 @@ class WMSTA(nn.Module):
             mem_dim=64,
         ).to(device)
 
-        # 时空特征门控增强层
-        self.fc_st2 = nn.Conv2d(
-            self.network_channel, self.network_channel, kernel_size=(1, 1)
-        )
+     
+   
         self.fc_st = nn.Conv2d(
             self.network_channel, self.network_channel, kernel_size=(1, 1)
         )
@@ -414,7 +412,7 @@ class WMSTA(nn.Module):
 
         # 空间记忆注意力 + 门控残差增强
         data_st = self.SpatialBlock(data_st) + \
-                  self.fc_st2(data_st) * torch.sigmoid(self.fc_st(data_st))
+                  self.fc_st(data_st)
 
         # 回归预测：[B, output_len, N, 1]
         prediction = self.regression_layer(data_st)
