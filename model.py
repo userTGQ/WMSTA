@@ -6,12 +6,13 @@ import torch.nn.functional as F
 
 
 class LayerNorm(nn.Module):
-    """自定义 LayerNorm：对 [C, N] 两个维度做归一化。"""
+    """Custom LayerNorm that normalizes over the [C, N] dimensions."""
+
     def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
         super(LayerNorm, self).__init__()
-        self.eps = eps  # 防止除零的小常数
+        self.eps = eps  # A small constant used to prevent division by zero
         self.normalized_shape = tuple(normalized_shape)
-        self.elementwise_affine = elementwise_affine  # 是否使用可学习的缩放和平移参数
+        self.elementwise_affine = elementwise_affine  # Whether to use learnable scale and bias parameters
 
         if elementwise_affine:
             self.weight = nn.Parameter(torch.ones(self.normalized_shape))
@@ -19,19 +20,21 @@ class LayerNorm(nn.Module):
 
     def forward(self, input):
         # input: [B, C, N, T]
-        # 对通道维 C 和节点维 N 求均值/方差，保留维度便于广播
+        # Compute the mean and variance over the channel dimension C and node dimension N,
+        # while keeping dimensions for broadcasting.
         mean = input.mean(dim=(1, 2), keepdim=True)
         variance = input.var(dim=(1, 2), unbiased=False, keepdim=True)
         input = (input - mean) / torch.sqrt(variance + self.eps)
 
-        # 可选：加入可学习的仿射变换
+        # Optionally apply a learnable affine transformation.
         if self.elementwise_affine:
             input = input * self.weight + self.bias
         return input
 
 
 class Conv(nn.Module):
-    """1x1 卷积 + Dropout，用于通道特征变换。"""
+    """1x1 convolution followed by dropout for channel-wise feature transformation."""
+
     def __init__(self, features, dropout=0.1):
         super(Conv, self).__init__()
         self.conv = nn.Conv2d(features, features, (1, 1))
@@ -44,42 +47,44 @@ class Conv(nn.Module):
 
 
 class TemporalEmbedding(nn.Module):
-    """根据一天内时间片和星期信息生成时间嵌入。"""
+    """Generates temporal embeddings from time-of-day and day-of-week information."""
+
     def __init__(self, time, features):
         super(TemporalEmbedding, self).__init__()
-        self.time = time  # 一天被划分的时间片数量，例如 288 表示 5 分钟一个片段
+        self.time = time  # Number of time slots per day, e.g. 288 means one slot every 5 minutes
 
-        # 一天内时间片 embedding
+        # Time-of-day embedding.
         self.time_day = nn.Parameter(torch.empty(time, features))
         nn.init.xavier_uniform_(self.time_day)
 
-        # 星期 embedding，范围为 0~6
+        # Day-of-week embedding, indexed from 0 to 6.
         self.time_week = nn.Parameter(torch.empty(7, features))
         nn.init.xavier_uniform_(self.time_week)
 
     def forward(self, x):
-        # x: [B, T, N, input_dim]，其中 x[..., 1] 为 day/time-of-day 特征
+        # x: [B, T, N, input_dim], where x[..., 1] stores the time-of-day feature.
         day_emb = x[..., 1]
-        # 取最后一个时间步的 day embedding 索引
+        # Use the time-of-day index from the final time step.
         time_day = self.time_day[
             (day_emb[:, -1, :] * self.time).type(torch.LongTensor)
         ]
         time_day = time_day.transpose(1, 2).unsqueeze(-1)  # [B, C, N, 1]
 
-        # x[..., 2] 为星期信息
+        # x[..., 2] stores the day-of-week information.
         week_emb = x[..., 2]
         time_week = self.time_week[
             (week_emb[:, -1, :]).type(torch.LongTensor)
         ]
         time_week = time_week.transpose(1, 2).unsqueeze(-1)  # [B, C, N, 1]
 
-        # 合并日内时间和星期信息
+        # Combine the time-of-day and day-of-week embeddings.
         tem_emb = time_day + time_week
         return tem_emb
 
 
 class TemporalEmbedding2(nn.Module):
-    """另一种索引方式的时间嵌入模块，适配不同输入维度排列。"""
+    """Alternative temporal embedding module for a different input dimension ordering."""
+
     def __init__(self, time, features):
         super(TemporalEmbedding2, self).__init__()
         self.time = time
@@ -91,7 +96,8 @@ class TemporalEmbedding2(nn.Module):
         nn.init.xavier_uniform_(self.time_week)
 
     def forward(self, x):
-        # 这里默认 x 的维度排列与 TemporalEmbedding 不同
+        # This implementation assumes that x uses a different dimension ordering
+        # from the one expected by TemporalEmbedding.
         day_emb = x[..., 1]
         time_day = self.time_day[
             (day_emb[:, :, -1] * self.time).type(torch.LongTensor)
@@ -109,10 +115,12 @@ class TemporalEmbedding2(nn.Module):
 
 
 class GatedUpdate(nn.Module):
-    """门控更新单元：用当前分块统计信息更新隐藏状态 h。"""
+    """Gated update unit that updates hidden state h using statistics from the current chunk."""
+
     def __init__(self, channels, dropout=0.1):
         super().__init__()
-        # 输入由 h、均值、最大值、最小值拼接而成，所以通道数为 channels * 4
+        # The input concatenates h, mean, maximum, and minimum,
+        # so its channel size is channels * 4.
         self.z = nn.Conv2d(channels * 4, channels, kernel_size=1)
         self.h_hat = nn.Sequential(
             nn.Conv2d(channels * 4, channels, kernel_size=1),
@@ -121,36 +129,37 @@ class GatedUpdate(nn.Module):
         )
 
     def forward(self, h, c):
-        # h: 历史隐藏状态 [B, C, N, 1]
-        # c: 当前分块统计特征 [B, 3C, N, 1]
+        # h: Historical hidden state [B, C, N, 1]
+        # c: Statistical features of the current chunk [B, 3C, N, 1]
         inp = torch.cat([h, c], dim=1)
-        z = torch.sigmoid(self.z(inp))  # 更新门，控制新旧信息比例
-        h_new = self.h_hat(inp)         # 候选隐藏状态
+        z = torch.sigmoid(self.z(inp))  # Update gate controlling the balance between old and new information
+        h_new = self.h_hat(inp)  # Candidate hidden state
         return (1 - z) * h + z * h_new
 
 
 class DCTAconv(nn.Module):
-    """双分支时间压缩模块：分别压缩高频/低频信号，再通过门控融合。"""
+    """Dual-branch temporal compression module for high- and low-frequency signals."""
+
     def __init__(
-        self,
-        channels=64,
-        chunk_num_high=3,
-        chunk_num_low=4,
-        dropout=0.1
+            self,
+            channels=64,
+            chunk_num_high=3,
+            chunk_num_low=4,
+            dropout=0.1
     ):
         super().__init__()
-        self.chunk_num_high = chunk_num_high  # 高频分支切分块数
-        self.chunk_num_low = chunk_num_low    # 低频分支切分块数
+        self.chunk_num_high = chunk_num_high  # Number of chunks in the high-frequency branch
+        self.chunk_num_low = chunk_num_low  # Number of chunks in the low-frequency branch
 
-        # 高频/低频分支各自使用独立的门控更新器
+        # Use separate gated update units for the high- and low-frequency branches.
         self.update_s = GatedUpdate(channels, dropout)
         self.update_t = GatedUpdate(channels, dropout)
 
-        # 分支融合门，决定更多采用高频还是低频信息
+        # Branch gates determine how much high- or low-frequency information is used.
         self.branch_gate = nn.Sequential(nn.Conv2d(channels, channels, kernel_size=1))
         self.branch_gate2 = nn.Sequential(nn.Conv2d(channels, channels, kernel_size=1))
 
-        # 输出归一化和投影
+        # Output normalization and projection.
         self.out_norm = nn.GroupNorm(8 if channels % 8 == 0 else 1, channels)
         self.out_proj = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1),
@@ -160,47 +169,50 @@ class DCTAconv(nn.Module):
 
     def _compress_one_branch(self, x, updater, chunk_num):
         # x: [B, C, N, T]
-        # 沿时间维 T 将序列切成多个块
+        # Split the sequence into multiple chunks along the temporal dimension T.
         chunks = torch.chunk(x, chunk_num, dim=-1)
 
-        # 用第一个块的时间均值初始化隐藏状态
+        # Initialize the hidden state with the temporal mean of the first chunk.
         h = chunks[0].mean(dim=-1, keepdim=True)
 
         for ck in chunks:
-            # 对每个时间块提取均值、最大值、最小值，概括该块的动态变化
+            # Extract the mean, maximum, and minimum from each temporal chunk
+            # to summarize its dynamic behavior.
             x_avg = ck.mean(dim=-1, keepdim=True)
             x_max = ck.max(dim=-1, keepdim=True)[0]
             x_min = ck.min(dim=-1, keepdim=True)[0]
 
-            # 拼接统计特征，并通过门控更新隐藏状态
+            # Concatenate the statistical features and update the hidden state through the gate.
             other = torch.cat([x_avg, x_max, x_min], dim=1)
             h = updater(h, other)
 
         return h
 
     def forward(self, xs, xt, time_emb, last_time_emb):
-        # xs: 高频特征 [B, C, N, T]
-        # xt: 低频特征 [B, C, N, T]
-        # last_time_emb: 最后一个时间步的时间嵌入 [B, 2C, N, 1]
+        # xs: High-frequency features [B, C, N, T]
+        # xt: Low-frequency features [B, C, N, T]
+        # last_time_emb: Temporal embedding of the final time step [B, 2C, N, 1]
 
-        hs = self._compress_one_branch(xs, self.update_s, self.chunk_num_high)  # 高频/波动信息
-        ht = self._compress_one_branch(xt, self.update_t, self.chunk_num_low)   # 低频/趋势信息
+        hs = self._compress_one_branch(xs, self.update_s, self.chunk_num_high)  # High-frequency/variation information
+        ht = self._compress_one_branch(xt, self.update_t, self.chunk_num_low)  # Low-frequency/trend information
 
-        # 自适应融合高频和低频分支
+        # Adaptively fuse the high- and low-frequency branches.
         g = torch.sigmoid(self.branch_gate(hs) + self.branch_gate2(ht))
         h = (1 - g) * hs + g * ht
 
-        # 归一化与通道投影
+        # Apply normalization and channel projection.
         h = self.out_proj(self.out_norm(h))
 
-        # 拼接融合特征、最后观测值和时间嵌入，形成时空模块输入
+        # Concatenate the fused feature, final observation, and temporal embedding
+        # to form the input to the spatiotemporal module.
         last_obs = xs[..., -1:] + xt[..., -1:]
         out = torch.cat([h, last_obs, last_time_emb], dim=1)
         return out
 
 
 class SharedMemorySpatialattention(nn.Module):
-    """共享记忆空间注意力模块：通过可学习 memory 建模节点间关系。"""
+    """Shared-memory spatial attention module for modeling relationships among nodes."""
+
     def __init__(
             self,
             device,
@@ -231,20 +243,20 @@ class SharedMemorySpatialattention(nn.Module):
             [d_model, num_nodes, seq_length], elementwise_affine=False
         )
 
-        # 全局共享记忆槽，用于捕获节点间共性模式
+        # Globally shared memory slots used to capture common patterns among nodes.
         self.SharedMemory = nn.Parameter(torch.randn(mem_slots, mem_dim))
         nn.init.xavier_uniform_(self.SharedMemory)
 
-        # 写入 memory 和读取 memory 使用不同的 query 投影
+        # Use separate query projections for writing to and reading from memory.
         self.mem_write_q = nn.Linear(d_model, mem_dim, bias=False)
         self.mem_read_q = nn.Linear(d_model, mem_dim, bias=False)
 
-        # 门控变换，用于控制 memory 输出强度
+        # Gated transformations used to control the strength of the memory output.
         self.g = Conv(d_model)
         self.t = Conv(d_model)
         self.conv = nn.Conv2d(d_model, d_model, kernel_size=(1, 1))
 
-        # 节点自适应偏置，增强不同节点的个性化表达
+        # Node-adaptive bias that enhances node-specific representations.
         self.adaptive_bias = nn.init.xavier_uniform_(
             nn.Parameter(torch.empty(d_model, num_nodes, seq_length))
         )
@@ -254,33 +266,32 @@ class SharedMemorySpatialattention(nn.Module):
         B, C, N, T = input.shape
         assert T == 1
 
-        # 转为节点优先表示：[B, N, C]
+        # Convert to a node-major representation: [B, N, C].
         H = input.squeeze(-1).permute(0, 2, 1).contiguous()
 
-        # 写入阶段：每个节点根据共享 memory 计算注意力权重
+        # Write stage: each node computes attention weights over the shared memory.
         q_write = self.mem_write_q(H)  # [B, N, mem_dim]
-        k_mem_w = self.SharedMemory    # [M, mem_dim]
+        k_mem_w = self.SharedMemory  # [M, mem_dim]
         score_write = torch.matmul(q_write, k_mem_w.t()) / math.sqrt(self.mem_dim)
         attn_write = F.softmax(score_write, dim=-1)  # [B, N, M]
 
-        # 将节点特征聚合写入 memory_state：[B, M, C]
+        # Aggregate node features into memory_state: [B, M, C].
         memory_state = torch.einsum('bnm,bnc->bmc', attn_write, H)
 
-        # 读取阶段：节点从 memory_state 中读取与自身相关的信息
+        # Read stage: each node retrieves information relevant to itself from memory_state.
         q_read = self.mem_read_q(H)
         k_mem_r = self.SharedMemory
         score_read = torch.matmul(q_read, k_mem_r.t()) / math.sqrt(self.mem_dim)
         attn_read = F.softmax(score_read, dim=-1)
         HS = torch.einsum('bnm,bmc->bnc', attn_read, memory_state)  # [B, N, C]
 
-        # 转回卷积格式：[B, C, N, 1]
+        # Convert back to convolutional format: [B, C, N, 1].
         HS = HS.permute(0, 2, 1).unsqueeze(-1)
 
-        # 门控输出
+        # Apply gated output transformation.
         g = self.g(HS)
         t = torch.sigmoid(self.t(HS))
         HO = g * t
-
 
         HO = self.dropout(HO)
         HO = self.conv(HO) + HO * self.adaptive_bias
@@ -291,7 +302,8 @@ class SharedMemorySpatialattention(nn.Module):
 
 
 class WMSTA(nn.Module):
-    """主模型：小波分解 + 双分支时间压缩 + 共享记忆空间注意力 + 回归预测。"""
+    """Main model: wavelet decomposition, dual-branch temporal compression, shared-memory spatial attention, and regression prediction."""
+
     def __init__(
             self,
             device,
@@ -304,7 +316,7 @@ class WMSTA(nn.Module):
     ):
         super().__init__()
 
-        # 基本超参数
+        # Basic hyperparameters.
         self.device = device
         self.num_nodes = num_nodes
         self.node_dim = channels
@@ -313,7 +325,7 @@ class WMSTA(nn.Module):
         self.output_len = output_len
         self.head = 8
 
-        # 根据数据集节点数确定一天内时间片数量
+        # Determine the number of time slots per day based on the dataset's node count.
         if num_nodes == 170 or num_nodes == 307 or num_nodes == 358 or num_nodes == 883:
             time = 288
         elif num_nodes == 250 or num_nodes == 266:
@@ -321,13 +333,13 @@ class WMSTA(nn.Module):
         elif num_nodes > 200:
             time = 96
 
-        # 高频/低频时间块数量，分别用于 DCTAconv 两个分支
-        high = input_len // 2
+        # Numbers of temporal chunks used by the two DCTAconv branches.
+        high = input_len // 3
         low = input_len // 4
         chunk_num_high = high
         chunk_num_low = low
 
-        # 时间嵌入输出 channels * 2，后续与特征拼接
+        # The temporal embedding outputs channels * 2 features for later concatenation.
         self.Temb = TemporalEmbedding(time, channels * 2)
 
         self.DCTAconv = DCTAconv(
@@ -337,14 +349,15 @@ class WMSTA(nn.Module):
             dropout=dropout,
         )
 
-        # 小波分解后的高频/低频信号分别升维到 channels
+        # Project the high- and low-frequency signals from wavelet decomposition
+        # into the channels-dimensional feature space.
         self.start_conv = nn.Conv2d(1, channels, kernel_size=(1, 1))
         self.start_conv2 = nn.Conv2d(1, channels, kernel_size=(1, 1))
 
-        # DCTA 输出由 h、last_obs、time_emb 拼接得到：C + C + 2C = 4C
+        # The DCTA output concatenates h, last_obs, and time_emb: C + C + 2C = 4C.
         self.network_channel = channels * 4
 
-        # 空间注意力模块，建模节点间关系
+        # Spatial attention module for modeling relationships among nodes.
         self.SpatialBlock = SharedMemorySpatialattention(
             device=device,
             d_model=self.network_channel,
@@ -357,52 +370,54 @@ class WMSTA(nn.Module):
             mem_dim=64,
         ).to(device)
 
-     
-   
         self.fc_st = nn.Conv2d(
             self.network_channel, self.network_channel, kernel_size=(1, 1)
         )
-
-        # 输出层：将通道维映射为未来 output_len 个时间步预测
+        self.fc_st2 = nn.Conv2d(
+            self.network_channel, self.network_channel, kernel_size=(1, 1)
+        )
+        # Output layer that maps the channel dimension to output_len future time steps.
         self.regression_layer = nn.Conv2d(
             self.network_channel, self.output_len, kernel_size=(1, 1)
         )
 
     def param_num(self):
-        """统计模型参数总量。"""
+        """Returns the total number of model parameters."""
         return sum([param.nelement() for param in self.parameters()])
 
     def forward(self, history_data):
         # history_data: [B, input_dim, N, T]
-        # 第 0 个特征通常是目标交通流/速度等主变量
+        # Feature 0 is typically the primary target variable, such as traffic flow or speed.
         input_data = history_data[:, :1, :, :]  # [B, 1, N, T]
 
-        # PyWavelets 运行在 CPU/numpy 上，因此先从 Tensor 转为 numpy
+        # PyWavelets operates on CPU/NumPy arrays, so convert the tensor to NumPy first.
         residual_cpu = input_data.cpu()
         residual_numpy = residual_cpu.detach().numpy()
 
-        # 二层小波分解：coef[0] 为低频近似系数，coef[1:] 为高频细节系数
+        # Two-level wavelet decomposition: coef[0] contains the low-frequency approximation
+        # coefficients, while coef[1:] contains the high-frequency detail coefficients.
         coef = pywt.wavedec(residual_numpy, 'db1', level=2)
-        coefl = [coef[0]] + [None] * (len(coef) - 1)  # 仅保留低频系数
-        coefh = [None] + coef[1:]                     # 仅保留高频系数
+        coefl = [coef[0]] + [None] * (len(coef) - 1)  # Keep only the low-frequency coefficients
+        coefh = [None] + coef[1:]  # Keep only the high-frequency coefficients
 
-        # 小波重构得到低频趋势信号和高频波动信号
+        # Reconstruct the low-frequency trend signal and high-frequency variation signal.
         low_freq_signal = pywt.waverec(coefl, 'db1')
         high_freq_signal = pywt.waverec(coefh, 'db1')
 
-        # 转回 Tensor 并移动到指定设备
+        # Convert back to tensors and move them to the specified device.
         low_freq_feature = torch.from_numpy(low_freq_signal).to(self.device)
         high_freq_signal = torch.from_numpy(high_freq_signal).to(self.device)
 
-        # 通过 1x1 卷积将单通道信号映射到 channels 维特征空间
+        # Use 1x1 convolutions to map single-channel signals into the channels-dimensional feature space.
         high_freq_feature = self.start_conv(high_freq_signal)  # [B, 64, N, T]
         low_freq_feature = self.start_conv2(low_freq_feature)  # [B, 64, N, T]
 
-        # 调整维度给时间嵌入模块使用：[B, T, N, input_dim]
+        # Rearrange dimensions for the temporal embedding module: [B, T, N, input_dim].
         history_data = history_data.permute(0, 3, 2, 1)
         temporal_last_embedding = self.Temb(history_data)  # [B, 2C, N, 1]
 
-        # 时间压缩与高低频融合，输出 [B, 4C, N, 1]
+        # Compress the temporal dimension and fuse high- and low-frequency features,
+        # producing an output of shape [B, 4C, N, 1].
         data_st = self.DCTAconv(
             high_freq_feature,
             low_freq_feature,
@@ -410,10 +425,10 @@ class WMSTA(nn.Module):
             temporal_last_embedding
         )
 
-        # 空间记忆注意力 + 门控残差增强
+        # Apply spatial memory attention and gated residual enhancement.
         data_st = self.SpatialBlock(data_st) + \
-                  self.fc_st(data_st)
+                  self.fc_st(data_st) * self.fc_st2(data_st)
 
-        # 回归预测：[B, output_len, N, 1]
+        # Regression prediction: [B, output_len, N, 1].
         prediction = self.regression_layer(data_st)
         return prediction
