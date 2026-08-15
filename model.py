@@ -427,7 +427,7 @@ class WMSTA(nn.Module):
 
         # Apply spatial memory attention and gated residual enhancement.
         data_st = self.SpatialBlock(data_st) + \
-                  self.fc_st(data_st) * self.fc_st2(data_st)
+                  self.fc_st(data_st) * torch.sigmoid(self.fc_st2(data_st))
 
         # Regression prediction: [B, output_len, N, 1].
         prediction = self.regression_layer(data_st)
