@@ -25,7 +25,7 @@ parser.add_argument("--dropout", type=float, default=0.1, help="dropout rate")
 parser.add_argument(
     "--weight_decay", type=float, default=0.0001, help="weight decay rate"
 )
-parser.add_argument("--epochs", type=int, default=500, help="")
+
 parser.add_argument("--print_every", type=int, default=50, help="")
 parser.add_argument(
     "--save",
@@ -44,17 +44,17 @@ args = parser.parse_args()
 
 class trainer:
     def __init__(
-        self,
-        scaler,
-        input_dim,
-        channels,
-        num_nodes,
-        input_len,
-        output_len,
-        dropout,
-        lrate,
-        wdecay,
-        device,
+            self,
+            scaler,
+            input_dim,
+            channels,
+            num_nodes,
+            input_len,
+            output_len,
+            dropout,
+            lrate,
+            wdecay,
+            device,
     ):
         self.model = WMSTA(
             device, input_dim, channels, num_nodes, input_len, output_len, dropout
@@ -102,20 +102,21 @@ class trainer:
 
 
 def seed_it(seed):
-    random.seed(seed) 
+    random.seed(seed)
     os.environ["PYTHONSEED"] = str(seed)
     np.random.seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed) 
-    torch.backends.cudnn.deterministic = True 
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = True
     torch.manual_seed(seed)
 
 
 def main():
-    seed_it(6666)
+    seed_it(1)
 
     data = args.data
+    args.epochs = 500
 
     if args.data == "PEMS08":
         args.data = "data//" + args.data
@@ -132,7 +133,7 @@ def main():
         args.num_nodes = 170
         args.input_len = 48
         args.output_len = 48
-    
+
     elif args.data == "PEMS08_60":
         args.data = "data//" + args.data
         args.num_nodes = 170
@@ -150,17 +151,18 @@ def main():
         args.num_nodes = 307
         args.input_len = 48
         args.output_len = 48
-    
+
     elif args.data == "PEMS04_60":
         args.data = "data//" + args.data
         args.num_nodes = 307
         args.input_len = 60
         args.output_len = 60
 
+
     elif args.data == "PEMS03":
         args.data = "data//" + args.data
         args.num_nodes = 358
-        args.epochs = 300
+        args.epochs = 70
         args.es_patience = 100
 
     elif args.data == "PEMS04":
@@ -172,28 +174,28 @@ def main():
         args.num_nodes = 883
 
     elif args.data == "gba_his_2019":
-        args.data = "data//"+args.data
+        args.data = "data//" + args.data
         args.num_nodes = 2352
         args.epochs = 300
 
     elif args.data == "gla_his_2019":
-        args.data = "data//"+args.data
+        args.data = "data//" + args.data
         args.num_nodes = 3834
         args.epochs = 300
-    
+
     elif args.data == "ca_his_2019":
-        args.data = "data//"+args.data
+        args.data = "data//" + args.data
         args.num_nodes = 8600
         args.epochs = 300
 
     elif args.data == "bike_drop":
         args.data = "data//" + args.data
         args.num_nodes = 250
-    
+
     elif args.data == "bike_pick":
         args.data = "data//" + args.data
         args.num_nodes = 250
-    
+
     elif args.data == "taxi_drop":
         args.data = "data//" + args.data
         args.num_nodes = 266
@@ -338,79 +340,22 @@ def main():
 
         if mvalid_loss < loss:
             print("###Update tasks appear###")
-            if i < 100:
-                # It is not necessary to print the results of the test set when epoch is less than 100, because the model has not yet converged.
-                loss = mvalid_loss
-                torch.save(engine.model.state_dict(), path + "best_model.pth")
-                bestid = i
-                epochs_since_best_mae = 0
-                print("Updating! Valid Loss:", mvalid_loss, end=", ")
-                print("epoch: ", i)
 
-            elif i > 100:
-                outputs = []
-                realy = torch.Tensor(dataloader["y_test"]).to(device)
-                realy = realy.transpose(1, 3)[:, 0, :, :]
+            loss = mvalid_loss
+            torch.save(
+                engine.model.state_dict(),
+                path + "best_model.pth"
+            )
 
-                for iter, (x, y) in enumerate(dataloader["test_loader"].get_iterator()):
-                    testx = torch.Tensor(x).to(device)
-                    testx = testx.transpose(1, 3)
-                    with torch.no_grad():
-                        preds = engine.model(testx).transpose(1, 3)
-                    outputs.append(preds.squeeze())
+            bestid = i
+            epochs_since_best_mae = 0
 
-                yhat = torch.cat(outputs, dim=0)
-                yhat = yhat[: realy.size(0), ...]
-
-                amae = []
-                amape = []
-                awmape = []
-                armse = []
-                test_m = []
-
-                for j in range(args.output_len):
-                    pred = scaler.inverse_transform(yhat[:, :, j])
-                    real = realy[:, :, j]
-                    metrics = util.metric(pred, real)
-                    log = "Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test RMSE: {:.4f}, Test MAPE: {:.4f}, Test WMAPE: {:.4f}"
-                    print(
-                        log.format(
-                            j + 1, metrics[0], metrics[2], metrics[1], metrics[3]
-                        )
-                    )
-
-                    test_m = dict(
-                        test_loss=np.mean(metrics[0]),
-                        test_rmse=np.mean(metrics[2]),
-                        test_mape=np.mean(metrics[1]),
-                        test_wmape=np.mean(metrics[3]),
-                    )
-                    test_m = pd.Series(test_m)
-
-                    amae.append(metrics[0])
-                    amape.append(metrics[1])
-                    armse.append(metrics[2])
-                    awmape.append(metrics[3])
-
-                log = "On average over 12 horizons, Test MAE: {:.4f}, Test RMSE: {:.4f}, Test MAPE: {:.4f}, Test WMAPE: {:.4f}"
-                print(
-                    log.format(
-                        np.mean(amae), np.mean(armse), np.mean(amape), np.mean(awmape)
-                    )
-                )
-
-                if np.mean(amae) < test_log:
-                    test_log = np.mean(amae)
-                    loss = mvalid_loss
-                    torch.save(engine.model.state_dict(), path + "best_model.pth")
-                    epochs_since_best_mae = 0
-                    print("Test low! Updating! Test Loss:", np.mean(amae), end=", ")
-                    print("Test low! Updating! Valid Loss:", mvalid_loss, end=", ")
-                    bestid = i
-                    print("epoch: ", i)
-                else:
-                    epochs_since_best_mae += 1
-                    print("No update")
+            print(
+                "Updating! Valid Loss:",
+                mvalid_loss,
+                "epoch:",
+                i
+            )
 
         else:
             epochs_since_best_mae += 1
