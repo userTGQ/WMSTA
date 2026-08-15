@@ -291,10 +291,10 @@ class SharedMemorySpatialattention(nn.Module):
         # Apply gated output transformation.
         g = self.g(HS)
         t = torch.sigmoid(self.t(HS))
-        HO = g * t
+        HS = g * t
 
-        HO = self.dropout(HO)
-        HO = self.conv(HO) + HO * self.adaptive_bias
+        HS = self.dropout(HS)
+        HO = self.conv(HS) + HS * self.adaptive_bias
         HO = self.LayerNorm(HO)
         HO = self.dropout(HO)
 
