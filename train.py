@@ -30,7 +30,7 @@ parser.add_argument("--print_every", type=int, default=50, help="")
 parser.add_argument(
     "--save",
     type=str,
-    default="./logs/" + str(time.strftime("%Y-%m-%d-%H")) + "-",
+    default="./logs/" + str(time.strftime("%Y-%m-%d-%H-%S")) + "-",
     help="save path",
 )
 parser.add_argument(
