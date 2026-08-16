@@ -10,7 +10,7 @@ import random
 from model import WMSTA
 from ranger21 import Ranger
 import torch.optim as optim
-
+from fvcore.nn import FlopCountAnalysis
 parser = argparse.ArgumentParser()
 parser.add_argument("--device", type=str, default="cuda:0", help="")
 parser.add_argument("--data", type=str, default="PEMS08", help="data path")
@@ -239,7 +239,40 @@ def main():
         args.weight_decay,
         device,
     )
+    # ===========================
+    # Calculate FLOPs
+    # ===========================
 
+    engine.model.eval()
+
+    for x, y in dataloader["train_loader"].get_iterator():
+        sample_x = torch.Tensor(x).to(device)
+
+        sample_x = sample_x.transpose(1, 3)
+
+        flops = FlopCountAnalysis(
+            engine.model,
+            sample_x
+        )
+
+        print(
+            "FLOPs: %.2f G"
+            %
+            (flops.total() / 1e9)
+        )
+
+        params = sum(
+            p.numel()
+            for p in engine.model.parameters()
+        )
+
+        print(
+            "Parameters: %.3f M"
+            %
+            (params / 1e6)
+        )
+
+        break
     print("start training...", flush=True)
 
     for i in range(1, args.epochs + 1):
@@ -277,7 +310,8 @@ def main():
         t2 = time.time()
         log = "Epoch: {:03d}, Training Time: {:.4f} secs"
         print(log.format(i, (t2 - t1)))
-        train_time.append(t2 - t1)
+        if 20 <= i <=70:
+            train_time.append(t2 - t1)
 
         # validation
         valid_loss = []
@@ -301,7 +335,8 @@ def main():
 
         log = "Epoch: {:03d}, Inference Time: {:.4f} secs"
         print(log.format(i, (s2 - s1)))
-        val_time.append(s2 - s1)
+        if 20 <= i <=70:
+            val_time.append(s2 - s1)
 
         mtrain_loss = np.mean(train_loss)
         mtrain_mape = np.mean(train_mape)
