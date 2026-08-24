@@ -3,7 +3,7 @@ This is the pytorch implementation of WMSTA. I hope these codes are helpful to y
 
 
 ## Requirements
-The code is built based on Python 3.9.12, PyTorch 1.11.0, and NumPy 1.21.2.
+The code is built based on Python 3.9.18, PyTorch 2.8.0, and NumPy 1.22.4.
 
 ## Datasets
 
@@ -13,11 +13,11 @@ We also provide preprocessed datasets that you can access [here](https://drive.g
 It's easy to run! Here are some examples, and you can customize the model settings in train.py.
 ### PEMS08
 ```
-nohup python -u train.py --data PEMS08 > PEMS08.log &
+python train.py --data PEMS08 > PEMS08.log &
 ```
 ### NYCBike Drop-off
 ```
-nohup python -u train.py --data bike_drop > bike_drop.log &
+python train.py --data bike_drop > bike_drop.log &
 ```
 ## Reference Code
 
