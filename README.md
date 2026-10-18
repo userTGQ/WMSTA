@@ -2,6 +2,10 @@
 This is the pytorch implementation of WMSTA. I hope these codes are helpful to you!
 
 
+This paper has been accepted by [IEEE Internet of Things Journal 2026](https://ieeexplore.ieee.org/document/11739501).
+
+
+
 ## Requirements
 The code is built based on Python 3.9.18, PyTorch 2.8.0, and NumPy 1.22.4.
 
